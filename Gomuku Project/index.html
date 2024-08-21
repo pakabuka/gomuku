@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gomoku Online</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f4f4f4;
+        }
+        #game-container {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+        }
+        #board {
+            display: grid;
+            grid-template-columns: repeat(15, 30px);
+            grid-template-rows: repeat(15, 30px);
+            gap: 2px;
+            margin-top: 20px;
+        }
+        .cell {
+            width: 30px;
+            height: 30px;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            user-select: none;
+        }
+        .black {
+            color: black;
+        }
+        .white {
+            color: white;
+            background-color: black;
+            border-radius: 50%;
+        }
+        #room-container {
+            text-align: center;
+        }
+        #room-container input {
+            padding: 10px;
+            margin: 5px;
+            font-size: 16px;
+        }
+        #room-container button {
+            padding: 10px;
+            margin: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #exit-room {
+            display: none;
+            padding: 10px;
+            margin-top: 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #d9534f;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        #chatbox {
+            width: 450px;
+            height: 150px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            overflow-y: scroll;
+            margin-top: 20px;
+            background-color: #fff;
+        }
+        #chatbox ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        #chatbox ul li {
+            margin-bottom: 10px;
+        }
+        #message-input {
+            width: 350px;
+            padding: 10px;
+            margin-top: 10px;
+            margin-right: 10px;
+            font-size: 16px;
+        }
+        #send-button {
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #player-info {
+            margin-top: 10px;
+            text-align: center;
+        }
+        #turn-info {
+            margin-top: 10px;
+            text-align: center;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div id="room-container">
+    <h1>Gomoku Online</h1>
+    <p>Enter Room Name to Join/Create:</p>
+    <input type="text" id="room-name" placeholder="Room Name">
+    <button id="join-room-button" onclick="joinRoom()">Join Room</button>
+</div>
+
+<div id="game-container">
+    <h2>Room: <span id="room-display"></span></h2>
+    <div id="player-info">
+        <p id="black-player">Black: Waiting...</p>
+        <p id="white-player">White: Waiting...</p>
+    </div>
+    <div id="turn-info">
+        <p id="turn-display">Waiting for the game to start...</p>
+    </div>
+    <div id="board"></div>
+    <div id="chatbox">
+        <ul id="messages"></ul>
+    </div>
+    <input type="text" id="message-input" placeholder="Type a message...">
+    <button id="send-button" onclick="sendMessage()">Send</button>
+    <button id="exit-room" onclick="exitRoom()">Exit Room</button>
+</div>
+
+<script>
+    const boardSize = 15;
+    const winLength = 5;
+    
+    let board = [];
+    let currentPlayer = 'black';
+    let roomName = '';
+    let gameStarted = false;
+    let myTurn = false;
+    let playersInRoom = 0;
+    let playerRole = ''; // 'black' or 'white' based on the player's role
+    let socket = new WebSocket('ws://localhost:8080'); // Local WebSocket URL
+
+    socket.onmessage = function(event) {
+        const message = JSON.parse(event.data);
+        if (message.type === 'start') {
+            document.getElementById('room-container').style.display = 'none';
+            document.getElementById('game-container').style.display = 'flex';
+            document.getElementById('room-display').innerText = roomName;
+            document.getElementById('exit-room').style.display = 'none';
+            gameStarted = true;
+            playerRole = message.role; // Assign the player role ('black' or 'white')
+            myTurn = playerRole === 'black';
+
+            // Set player info
+            document.getElementById('black-player').innerText = `Black: ${playerRole === 'black' ? 'You' : 'Opponent'}`;
+            document.getElementById('white-player').innerText = `White: ${playerRole === 'white' ? 'You' : 'Opponent'}`;
+
+            // Display the initial turn
+            updateTurnDisplay();
+        } else if (message.type === 'move') {
+            placeStone(message.row, message.col, message.player);
+            myTurn = message.player !== playerRole; // Switch turns
+            updateTurnDisplay(); // Update turn display after each move
+        } else if (message.type === 'join' && message.room === roomName) {
+            playersInRoom = message.players;
+            if (playersInRoom === 1) {
+                alert("Waiting for the other player...");
+            }
+        } else if (message.type === 'player_left') {
+            alert(message.message);
+            exitRoom();
+        } else if (message.type === 'chat') {
+            displayMessage(message.sender, message.text);
+        }
+    };
+
+    function joinRoom() {
+        roomName = document.getElementById('room-name').value;
+        if (roomName) {
+            socket.send(JSON.stringify({ type: 'join', room: roomName }));
+            document.getElementById('join-room-button').disabled = true;
+        }
+    }
+
+    function initializeBoard() {
+        const boardElement = document.getElementById('board');
+        boardElement.innerHTML = '';
+        for (let i = 0; i < boardSize; i++) {
+            board[i] = [];
+            for (let j = 0; j < boardSize; j++) {
+                board[i][j] = null;
+                const cell = document.createElement('div');
+                cell.className = 'cell';
+                cell.addEventListener('click', () => handleMove(i, j));
+                boardElement.appendChild(cell);
+            }
+        }
+    }
+
+    function handleMove(row, col) {
+        if (gameStarted && myTurn && !board[row][col]) {
+            socket.send(JSON.stringify({ type: 'move', room: roomName, row, col, player: playerRole }));
+            placeStone(row, col, playerRole);
+            myTurn = false;
+        }
+    }
+
+    function placeStone(row, col, player) {
+        board[row][col] = player;
+        const cell = document.getElementById('board').children[row * boardSize + col];
+        cell.classList.add(player);
+        cell.innerText = player === 'black' ? '●' : '○';
+        if (checkWin(row, col, player)) {
+            setTimeout(() => {
+                alert(`${player === 'black' ? 'Black' : 'White'} wins!`);
+                document.getElementById('exit-room').style.display = 'block';
+            }, 10);
+            gameStarted = false;
+        } else {
+            currentPlayer = currentPlayer === 'black' ? 'white' : 'black';
+            updateTurnDisplay();
+        }
+    }
+
+    function checkWin(row, col, player) {
+        return checkDirection(row, col, player, 1, 0) ||
+               checkDirection(row, col, player, 0, 1) ||
+               checkDirection(row, col, player, 1, 1) ||
+               checkDirection(row, col, player, 1, -1);
+    }
+
+    function checkDirection(row, col, player, rowDir, colDir) {
+        let count = 1;
+        for (let i = 1; i < winLength; i++) {
+            const r = row + i * rowDir;
+            const c = col + i * colDir;
+            if (r < 0 || r >= boardSize || c < 0 || c >= boardSize || board[r][c] !== player) break;
+            count++;
+        }
+        for (let i = 1; i < winLength;i++) {
+const r = row - i * rowDir;
+const c = col - i * colDir;
+if (r < 0 || r >= boardSize || c < 0 || c >= boardSize || board[r][c] !== player) break;
+count++;
+}
+return count >= winLength;
+}
+
+function sendMessage() {
+    const messageInput = document.getElementById('message-input');
+    const message = messageInput.value.trim();
+    if (message) {
+        socket.send(JSON.stringify({ type: 'chat', room: roomName, text: message, sender: playerRole }));
+        messageInput.value = '';
+    }
+}
+
+function displayMessage(sender, text) {
+    const messagesElement = document.getElementById('messages');
+    const messageElement = document.createElement('li');
+
+    let displaySender = '';
+
+    if (sender === playerRole) {
+        displaySender = `${playerRole.charAt(0).toUpperCase() + playerRole.slice(1)} (You)`;
+    } else {
+        const opponentRole = playerRole === 'black' ? 'white' : 'black';
+        displaySender = `${opponentRole.charAt(0).toUpperCase() + opponentRole.slice(1)} (Opponent)`;
+    }
+
+    messageElement.textContent = `${displaySender}: ${text}`;
+    messagesElement.appendChild(messageElement);
+    messagesElement.scrollTop = messagesElement.scrollHeight;
+}
+
+function updateTurnDisplay() {
+    const turnDisplay = document.getElementById('turn-display');
+    if (!gameStarted) {
+        turnDisplay.innerText = "Waiting for the game to start...";
+    } else {
+        turnDisplay.innerText = `${currentPlayer.charAt(0).toUpperCase() + currentPlayer.slice(1)}'s Turn`;
+    }
+}
+
+function exitRoom() {
+    board = [];
+    gameStarted = false;
+    roomName = '';
+    myTurn = false;
+    currentPlayer = 'black';
+    playersInRoom = 0;
+    playerRole = '';
+
+    document.getElementById('game-container').style.display = 'none';
+    document.getElementById('room-container').style.display = 'block';
+    document.getElementById('exit-room').style.display = 'none';
+
+    document.getElementById('messages').innerHTML = '';
+
+    document.getElementById('join-room-button').disabled = false;
+
+    initializeBoard();
+
+    socket.close();
+    socket = new WebSocket('ws://localhost:8080');
+
+    socket.onmessage = function(event) {
+        const message = JSON.parse(event.data);
+        if (message.type === 'start') {
+            document.getElementById('room-container').style.display = 'none';
+            document.getElementById('game-container').style.display = 'flex';
+            document.getElementById('room-display').innerText = roomName;
+            document.getElementById('exit-room').style.display = 'none';
+            gameStarted = true;
+            playerRole = message.role;
+            myTurn = playerRole === 'black';
+
+            // Set player info
+            document.getElementById('black-player').innerText = `Black: ${playerRole === 'black' ? 'You' : 'Opponent'}`;
+            document.getElementById('white-player').innerText = `White: ${playerRole === 'white' ? 'You' : 'Opponent'}`;
+
+            // Display the initial turn
+            updateTurnDisplay();
+        } else if (message.type === 'move') {
+            placeStone(message.row, message.col, message.player);
+            myTurn = message.player !== playerRole;
+            updateTurnDisplay(); // Update turn display after each move
+        } else if (message.type === 'join' && message.room === roomName) {
+            playersInRoom = message.players;
+            if (playersInRoom === 1) {
+                alert("Waiting for the other player...");
+            }
+        } else if (message.type === 'player_left') {
+            alert(message.message);
+            exitRoom();
+        } else if (message.type === 'chat') {
+            displayMessage(message.sender, message.text);
+        }
+    };
+}
+
+window.onload = initializeBoard;
+</script>
+</body>
+</html>
